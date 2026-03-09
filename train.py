@@ -620,10 +620,18 @@ print()  # newline after \r training log
 
 total_tokens = step * TOTAL_BATCH_SIZE
 
+# Save pre-eval checkpoint in case eval crashes
+ckpt_path = "pre_eval_checkpoint.pt"
+torch.save(model.state_dict(), ckpt_path)
+
 # Final eval
 model.eval()
 with autocast_ctx:
     val_bpb = evaluate_bpb(model, tokenizer, DEVICE_BATCH_SIZE)
+
+# Clean up checkpoint on successful eval
+if os.path.exists(ckpt_path):
+    os.remove(ckpt_path)
 
 # Final summary
 t_end = time.time()
