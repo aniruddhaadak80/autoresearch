@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 import subprocess
 import sys
 import os
@@ -34,7 +34,13 @@ def run_experiment(description):
     # 2. Run the training script
     print("⏳ Critic Phase 2: Running 5-minute training budget... (tail run.log for live output)")
     with open("run.log", "w", encoding="utf-8") as f:
-        train = subprocess.run(["uv", "run", "train.py"], stdout=f, stderr=subprocess.STDOUT)
+        try:
+            train = subprocess.run(["uv", "run", "train.py"], stdout=f, stderr=subprocess.STDOUT, timeout=600)
+        except subprocess.TimeoutExpired:
+            print("❌ CRASH: Training step timed out (exceeded 10-minute limit)!")
+            rollback()
+            log_result("N/A", "N/A", "CRASH", description)
+            return
     
     # 3. Analyze the outcomes
     print("📊 Critic Phase 3: Analyzing results...")
