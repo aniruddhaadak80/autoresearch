@@ -274,10 +274,14 @@ class Tokenizer:
 def get_token_bytes(device="cpu"):
     path = os.path.join(TOKENIZER_DIR, "token_bytes.pt")
     with open(path, "rb") as f:
-        return torch.load(f, map_location=device, weights_only=True)
+        try:
+            return torch.load(f, map_location=device, weights_only=True)
+        except TypeError:
+            f.seek(0)
+            return torch.load(f, map_location=device)
 
 
-def _document_batches(split, tokenizer_batch_size=128):
+def _document_batches(split, tokenizer_batch_size=128, rank=0, world_size=1):
     """Infinite iterator over document batches from parquet files."""
     parquet_paths = list_parquet_files()
     assert len(parquet_paths) > 0, "No parquet files found. Run prepare.py first."
@@ -294,12 +298,14 @@ def _document_batches(split, tokenizer_batch_size=128):
             for rg_idx in range(pf.num_row_groups):
                 rg = pf.read_row_group(rg_idx)
                 batch = rg.column("text").to_pylist()
-                for i in range(0, len(batch), tokenizer_batch_size):
-                    yield batch[i : i + tokenizer_batch_size], epoch
+                # Shard documents at source for rank-aware loading
+                sharded_batch = [doc for idx, doc in enumerate(batch) if (idx + rank) % world_size == 0]
+                for i in range(0, len(sharded_batch), tokenizer_batch_size):
+                    yield sharded_batch[i : i + tokenizer_batch_size], epoch
         epoch += 1
 
 
-def make_dataloader(tokenizer, B, T, split, buffer_size=1000):
+def make_dataloader(tokenizer, B, T, split, buffer_size=1000, rank=0, world_size=1):
     """
     BOS-aligned dataloader with best-fit packing.
     Every row starts with BOS. Documents packed using best-fit to minimize cropping.
@@ -308,7 +314,7 @@ def make_dataloader(tokenizer, B, T, split, buffer_size=1000):
     """
     assert split in ["train", "val"]
     row_capacity = T + 1
-    batches = _document_batches(split)
+    batches = _document_batches(split, rank=rank, world_size=world_size)
     bos_token = tokenizer.get_bos_token_id()
     doc_buffer = []
     epoch = 1
