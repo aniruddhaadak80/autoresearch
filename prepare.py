@@ -68,11 +68,16 @@ def download_single_shard(index):
         try:
             response = requests.get(url, stream=True, timeout=30)
             response.raise_for_status()
+            content_length = int(response.headers.get("Content-Length", 0))
             temp_path = filepath + ".tmp"
             with open(temp_path, "wb") as f:
                 for chunk in response.iter_content(chunk_size=1024 * 1024):
                     if chunk:
                         f.write(chunk)
+            if content_length > 0:
+                downloaded_size = os.path.getsize(temp_path)
+                if downloaded_size != content_length:
+                    raise IOError(f"Truncated download: expected {content_length} bytes, got {downloaded_size} bytes")
             os.rename(temp_path, filepath)
             print(f"  Downloaded {filename}")
             return True
@@ -128,7 +133,7 @@ def list_parquet_files():
     files = sorted(
         f
         for f in os.listdir(DATA_DIR)
-        if f.endswith(".parquet") and not f.endswith(".tmp")
+        if f.endswith(".parquet")
     )
     return [os.path.join(DATA_DIR, f) for f in files]
 
@@ -205,7 +210,7 @@ def train_tokenizer():
         if token_str in special_set:
             token_bytes_list.append(0)
         else:
-            token_bytes_list.append(len(token_str.encode("utf-8")))
+            token_bytes_list.append(len(enc.decode_single_token_bytes(token_id)))
     token_bytes_tensor = torch.tensor(token_bytes_list, dtype=torch.int32)
     torch.save(token_bytes_tensor, token_bytes_path)
     print(f"Tokenizer: saved token_bytes to {token_bytes_path}")
