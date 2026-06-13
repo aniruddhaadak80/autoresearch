@@ -1,15 +1,45 @@
-﻿import os
+import os
 import json
 import http.server
 import socketserver
 
 PORT = 8080
 
+def tail_file(filepath, num_lines=40):
+    """Efficient tail implementation seeking from the end in binary mode."""
+    if not os.path.exists(filepath):
+        return ""
+    try:
+        with open(filepath, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            file_size = f.tell()
+            buffer_size = 8192
+            lines = []
+            while file_size > 0 and len(lines) <= num_lines:
+                seek_pos = max(0, file_size - buffer_size)
+                f.seek(seek_pos, os.SEEK_SET)
+                chunk = f.read(file_size - seek_pos)
+                lines = chunk.split(b'\n')
+                if len(lines) > num_lines + 1:
+                    lines = lines[-num_lines:]
+                    break
+                if seek_pos == 0:
+                    break
+                file_size = seek_pos
+                buffer_size *= 2
+            return b"\n".join(lines).decode("utf-8", errors="replace")
+    except (FileNotFoundError, PermissionError):
+        return ""
+
 class DashboardHandler(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, format, *args):
+        # Override to suppress standard HTTP logging to stdout if desired, or keep it simple
+        pass
+
     def do_GET(self):
         if self.path == '/':
             self.send_response(200)
-            self.send_header('Content-type', 'text/html')
+            self.send_header('Content-type', 'text/html; charset=utf-8')
             self.end_headers()
             html = """<!DOCTYPE html>
 <html>
@@ -49,7 +79,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             <div class="panel" style="flex: 2">
                 <h2>Recent Experiments</h2>
                 <table>
-                    <thead><tr><th>Commit</th><th>BPB</th><th>Memory (MB)</th><th>Status</th><th>Description</th></tr></thead>
+                    <thead><tr><th>Commit</th><th>BPB</th><th>Memory (GB)</th><th>Status</th><th>Description</th></tr></thead>
                     <tbody id="tableBody"></tbody>
                 </table>
             </div>
@@ -61,6 +91,20 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
     </div>
     <script>
         let bpbChart;
+        
+        function escapeHTML(str) {
+            if (str === null || str === undefined) return "";
+            return String(str).replace(/[&<>'"]/g, 
+                tag => ({
+                    '&': '&amp;',
+                    '<': '&lt;',
+                    '>': '&gt;',
+                    "'": '&#39;',
+                    '"': '&quot;'
+                }[tag] || tag)
+            );
+        }
+
         async function fetchData() {
             try {
                 const res = await fetch('/data');
@@ -69,11 +113,11 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 const tbody = document.getElementById('tableBody');
                 tbody.innerHTML = data.results.slice(-10).reverse().map(r => `
                     <tr>
-                        <td><code>${r.commit.substring(0,7)}</code></td>
-                        <td>${r.bpb}</td>
-                        <td>${r.memory}</td>
-                        <td><span class="badge ${r.status}">${r.status}</span></td>
-                        <td>${r.description}</td>
+                        <td><code>${escapeHTML(r.commit.substring(0,7))}</code></td>
+                        <td>${escapeHTML(r.bpb)}</td>
+                        <td>${escapeHTML(r.memory)}</td>
+                        <td><span class="badge ${escapeHTML(r.status)}">${escapeHTML(r.status)}</span></td>
+                        <td>${escapeHTML(r.description)}</td>
                     </tr>
                 `).join('');
 
@@ -141,25 +185,21 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                                     "status": parts[3].upper(),
                                     "description": parts[4]
                                 })
-            except Exception:
+            except (FileNotFoundError, PermissionError) as e:
+                # Catch specific file read exceptions
                 pass
             
-            log_tail = ""
-            try:
-                if os.path.exists("run.log"):
-                    with open("run.log", "r", encoding="utf-8") as f:
-                        log_tail = "".join(f.readlines()[-40:])
-            except:
-                pass
+            log_tail = tail_file("run.log", num_lines=40)
 
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps({"results": results, "log": log_tail}).encode("utf-8"))
         else:
-            super().do_GET()
+            self.send_error(404, "File not found")
 
 if __name__ == '__main__':
-    with socketserver.TCPServer(("", PORT), DashboardHandler) as httpd:
+    # Bind to localhost (127.0.0.1) by default to prevent exposing logs/metrics to external interfaces
+    with socketserver.TCPServer(("127.0.0.1", PORT), DashboardHandler) as httpd:
         print(f"📊 Dashboard gracefully running at http://localhost:{PORT}")
         httpd.serve_forever()
